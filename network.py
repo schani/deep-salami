@@ -14,12 +14,12 @@ class Data:
         # Map 2 to [0.0, 1.0, 0.0 ...], 3 to [0.0, 0.0, 1.0 ...]
         return (np.arange(self.num_labels) == labels[:,None]).astype(np.float32)
 
-    def fc_reformat(self, dataset):
+    def reformat_1d(self, dataset):
         return dataset.reshape((-1, self.image_size * self.image_size)).astype(np.float32)
 
     # Reformat into a TensorFlow-friendly shape:
     # - convolutions need the image data formatted as a cube (width by height by #channels)
-    def conv_reformat(self, dataset):
+    def reformat_2d(self, dataset):
         return dataset.reshape((-1, self.image_size, self.image_size, self.num_channels)).astype(np.float32)
 
     def __init__(self):
@@ -50,18 +50,18 @@ class Data:
         self.conv_valid_dataset = None
         self.conv_test_dataset = None
 
-    def fc_datasets(self):
+    def datasets_1d(self):
         if self.fc_train_dataset is None:
-            self.fc_train_dataset = self.fc_reformat(self.train_dataset)
-            self.fc_valid_dataset = self.fc_reformat(self.valid_dataset)
-            self.fc_test_dataset = self.fc_reformat(self.test_dataset)
+            self.fc_train_dataset = self.reformat_1d(self.train_dataset)
+            self.fc_valid_dataset = self.reformat_1d(self.valid_dataset)
+            self.fc_test_dataset = self.reformat_1d(self.test_dataset)
         return (self.fc_train_dataset, self.fc_valid_dataset, self.fc_test_dataset)
 
-    def conv_datasets(self):
+    def datasets_2d(self):
         if self.conv_train_dataset is None:
-            self.conv_train_dataset = self.conv_reformat(self.train_dataset)
-            self.conv_valid_dataset = self.conv_reformat(self.valid_dataset)
-            self.conv_test_dataset = self.conv_reformat(self.test_dataset)
+            self.conv_train_dataset = self.reformat_2d(self.train_dataset)
+            self.conv_valid_dataset = self.reformat_2d(self.valid_dataset)
+            self.conv_test_dataset = self.reformat_2d(self.test_dataset)
         return (self.conv_train_dataset, self.conv_valid_dataset, self.conv_test_dataset)
 
 def accuracy(predictions, labels):
@@ -71,9 +71,15 @@ def wrong_predictions(predictions, labels):
     return np.nonzero(np.argmax(predictions, 1) != np.argmax(labels, 1))[0]
 
 class Network:
-    def __init__(self, batch_size, data, train_dataset, test_dataset):
+    def __init__(self, batch_size, is_2d, data):
         self.batch_size = batch_size
         self.data = data
+        self.is_2d = is_2d
+
+        if is_2d:
+            train_dataset, _, test_dataset = data.datasets_2d()
+        else:
+            train_dataset, _, test_dataset = data.datasets_1d()
 
         self.train_dataset = train_dataset
         self.test_dataset = test_dataset
@@ -139,10 +145,28 @@ class Network:
             #plt.imshow(np.reshape(fake_data[choice], (self.data.image_size, self.data.image_size)), cmap="gray")
             print("Prediction for worst: %f" % class_predictions[choice])
             for step in range(10000):
+                #print("fake shape is ", fake_data.shape)
                 # re-normalize choice
-                fake_data = np.tile(fake_data[choice] - np.mean(fake_data[choice]), (self.batch_size, 1))
+                choice_image = fake_data[choice]
+                choice_image = choice_image - np.mean(choice_image)
+                image_min = np.min(choice_image)
+                image_max = np.max(choice_image)
+
+                #print("image shape is ", choice_image.shape)
+
+                if self.is_2d:
+                    fake_data = np.tile(choice_image, (self.batch_size, 1, 1, 1))
+                else:
+                    fake_data = np.tile(choice_image, (self.batch_size, 1))
+
+                #print("after tiling fake shape is ", fake_data.shape)
+
                 for i in range(self.batch_size):
-                    fake_data[i, np.random.randint(self.data.image_size*self.data.image_size)] = np.random.rand() - 0.5
+                    new_pixel = np.random.uniform(image_min, image_max)
+                    if self.is_2d:
+                        fake_data[i, np.random.randint(self.data.image_size), np.random.randint(self.data.image_size)] = new_pixel
+                    else:
+                        fake_data[i, np.random.randint(self.data.image_size*self.data.image_size)] = new_pixel
                 feed_dict = {self.tf_train_dataset : fake_data, self.tf_train_labels : fake_labels}
                 [predictions] = session.run([self.train_prediction], feed_dict=feed_dict)
                 class_predictions = predictions[:, wanted_class]
@@ -158,8 +182,8 @@ class Network:
 
 class FCNetwork(Network):
     def __init__(self, batch_size, data, relu_sizes, with_dropout, initial_weights, initial_lr, lr_decay_steps):
-        train_dataset, valid_dataset, test_dataset = data.fc_datasets()
-        super().__init__(batch_size, data, train_dataset, test_dataset)
+        super().__init__(batch_size, False, data)
+        _, valid_dataset, test_dataset = data.datasets_1d()
 
         with self.graph.as_default():
             input_size = self.data.image_size * self.data.image_size
@@ -230,8 +254,8 @@ class FCNetwork(Network):
 
 class ConvNetwork(Network):
     def __init__(self, batch_size, data, patch_size, stride1, stride2, with_dropout, initial_weights, initial_lr, lr_decay_steps, depth1, depth2, num_hidden1, num_hidden2, num_hidden3):
-        train_dataset, valid_dataset, test_dataset = data.conv_datasets()
-        super().__init__(batch_size, data, train_dataset, test_dataset)
+        super().__init__(batch_size, True, data)
+        _, valid_dataset, test_dataset = data.datasets_2d()
 
         with self.graph.as_default():
             # Input data.
@@ -319,16 +343,14 @@ def rand_float(low, high):
 def rand_int(low, high):
     return int(rand_float(low, high))
 
-def run_random_fc(data):
+def run_random_fc(data, best_so_far):
     num_steps = 10000
 
     batch_size = 128
 
-    #(95.930000000000007, 0.9635408412392467, 729, 1336, 1430, 82.64951276779175)
-    best_so_far = 95.93
-    num_hidden1 = rand_int(500, 3200)
-    num_hidden2 = rand_int(150, 2600)
-    num_hidden3 = rand_int(30, 1800)
+    num_hidden1 = 2415 #rand_int(500, 3200)
+    num_hidden2 = 1151 #rand_int(150, 2600)
+    num_hidden3 = 619 #rand_int(30, 1800)
     with_dropout = rand_float(0.9, 1)
 
     initial_weights = rand_float(0.0005, 0.04)
@@ -338,8 +360,6 @@ def run_random_fc(data):
     network = FCNetwork(batch_size, data, [num_hidden1, num_hidden2, num_hidden3], with_dropout, initial_weights, initial_lr, lr_decay_steps)
 
     test_accuracy, total_time, _ = network.train(num_steps, best_so_far, "best-fc.ckpt")
-    if test_accuracy > best_so_far:
-        best_so_far = test_accuracy
     return (test_accuracy, with_dropout, initial_weights, initial_lr, lr_decay_steps, num_hidden1, num_hidden2, num_hidden3, total_time)
 
 def best_fc_network(data):
@@ -378,8 +398,16 @@ def best_conv_network(data):
 
 def main():
     data = Data()
+
+    #FC: (95.930000000000007, 0.9635408412392467, 729, 1336, 1430, 82.64951276779175)
+    best_so_far = 95.93
+
     for _ in range(1000):
-        print(run_random_fc(data))
+        results = run_random_fc(data, best_so_far)
+        print(results)
+        test_accuracy = results[0]
+        if test_accuracy > best_so_far:
+            best_so_far = test_accuracy
 
 if __name__ == "__main__":
     main()
