@@ -128,9 +128,11 @@ class Network:
             self.saver.save(session, save_filename)
         return (test_accuracy, test_predictions, wrong_test_predictions)
 
-    def fake_letter(self, session, wanted_class, minimum_prediction, model_filename):
-        start_time = time.time()
+    def load(self, session, model_filename):
         self.saver.restore(session, model_filename)
+
+    def fake_letter(self, session, wanted_class, minimum_prediction):
+        start_time = time.time()
 
         fake_data = self.test_dataset[0:self.batch_size, :]
         fake_labels = self.data.test_labels[0:self.batch_size, :]
