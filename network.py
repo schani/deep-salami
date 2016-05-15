@@ -86,99 +86,101 @@ class Network:
 
         self.graph = tf.Graph()
 
-    def train(self, num_steps, save_threshold, save_filename):
+    def session(self):
+        return tf.Session(graph = self.graph)
+
+    def train(self, session, num_steps):
         start_time = time.time()
-        with tf.Session(graph = self.graph) as session:
-            session.run(self.init_op)
-            tf.initialize_all_variables().run()
-            for step in range(num_steps):
-                # Pick an offset within the training data, which has been randomized.
-                # Note: we could use better randomization across epochs.
-                offset = (step * self.batch_size) % (self.data.train_labels.shape[0] - self.batch_size)
-                if offset + self.batch_size >= self.data.train_labels.shape[0]:
-                    offset = 0
-                # Generate a minibatch.
-                #(batch_data, batch_labels) = random_subset(self.train_dataset, self.data.train_labels, self.batch_size)
-                batch_data = self.train_dataset[offset:(offset + self.batch_size), :]
-                batch_labels = self.data.train_labels[offset:(offset + self.batch_size), :]
-                # Prepare a dictionary telling the session where to feed the minibatch.
-                # The key of the dictionary is the placeholder node of the graph to be fed,
-                # and the value is the numpy array to feed to it.
-                feed_dict = {self.tf_train_dataset : batch_data, self.tf_train_labels : batch_labels}
-                session.run([self.optimizer, self.loss, self.train_prediction], feed_dict=feed_dict)
-                #if (step % 500 == 0):
-                #    print("Minibatch loss at step %d: %f" % (step, l))
-                #    if math.isnan(l):
-                #        break
-                #    print("Minibatch accuracy: %.1f%%" % accuracy(predictions, batch_labels))
-                #    validation_accuracy = accuracy(self.valid_prediction.eval(), valid_labels)
-                #    print("Validation accuracy: %.1f%%" % validation_accuracy)
-            test_predictions = self.test_prediction.eval()
-            test_accuracy = accuracy(test_predictions, self.data.test_labels)
-            wrong_test_predictions = wrong_predictions(test_predictions, self.data.test_labels)
-            end_time = time.time()
-            total_time = end_time - start_time
-
-            if test_accuracy > save_threshold:
-                print("accuracy of %f - saving to %s" % (test_accuracy, save_filename))
-                self.saver.save(session, save_filename)
-
-            return (test_accuracy, total_time, wrong_test_predictions)
-
-    def fake_letter(self, wanted_class, minimum_prediction, model_filename):
-        start_time = time.time()
-        with tf.Session(graph=self.graph) as session:
-            self.saver.restore(session, model_filename)
-
-            fake_data = self.test_dataset[0:self.batch_size, :]
-            fake_labels = self.data.test_labels[0:self.batch_size, :]
-            #fake_data = np.random.rand(self.batch_size, self.data.image_size*self.data.image_size) - 0.5
-            #fake_labels = (np.arange(num_labels) == np.full(self.batch_size, wanted_class)[:,None]).astype(np.float32)
-
+        session.run(self.init_op)
+        tf.initialize_all_variables().run()
+        for step in range(num_steps):
+            # Pick an offset within the training data, which has been randomized.
+            # Note: we could use better randomization across epochs.
+            offset = (step * self.batch_size) % (self.data.train_labels.shape[0] - self.batch_size)
+            if offset + self.batch_size >= self.data.train_labels.shape[0]:
+                offset = 0
+            # Generate a minibatch.
+            #(batch_data, batch_labels) = random_subset(self.train_dataset, self.data.train_labels, self.batch_size)
+            batch_data = self.train_dataset[offset:(offset + self.batch_size), :]
+            batch_labels = self.data.train_labels[offset:(offset + self.batch_size), :]
             # Prepare a dictionary telling the session where to feed the minibatch.
             # The key of the dictionary is the placeholder node of the graph to be fed,
             # and the value is the numpy array to feed to it.
+            feed_dict = {self.tf_train_dataset : batch_data, self.tf_train_labels : batch_labels}
+            session.run([self.optimizer, self.loss, self.train_prediction], feed_dict=feed_dict)
+            #if (step % 500 == 0):
+            #    print("Minibatch loss at step %d: %f" % (step, l))
+            #    if math.isnan(l):
+            #        break
+            #    print("Minibatch accuracy: %.1f%%" % accuracy(predictions, batch_labels))
+            #    validation_accuracy = accuracy(self.valid_prediction.eval(), valid_labels)
+            #    print("Validation accuracy: %.1f%%" % validation_accuracy)
+        end_time = time.time()
+        total_time = end_time - start_time
+        return total_time
+
+    def test(self, session, save_threshold, save_filename):
+        test_predictions = self.test_prediction.eval()
+        test_accuracy = accuracy(test_predictions, self.data.test_labels)
+        wrong_test_predictions = wrong_predictions(test_predictions, self.data.test_labels)
+        if test_accuracy > save_threshold:
+            print("accuracy of %f - saving to %s" % (test_accuracy, save_filename))
+            self.saver.save(session, save_filename)
+        return (test_accuracy, test_predictions, wrong_test_predictions)
+
+    def fake_letter(self, session, wanted_class, minimum_prediction, model_filename):
+        start_time = time.time()
+        self.saver.restore(session, model_filename)
+
+        fake_data = self.test_dataset[0:self.batch_size, :]
+        fake_labels = self.data.test_labels[0:self.batch_size, :]
+        #fake_data = np.random.rand(self.batch_size, self.data.image_size*self.data.image_size) - 0.5
+        #fake_labels = (np.arange(num_labels) == np.full(self.batch_size, wanted_class)[:,None]).astype(np.float32)
+
+        # Prepare a dictionary telling the session where to feed the minibatch.
+        # The key of the dictionary is the placeholder node of the graph to be fed,
+        # and the value is the numpy array to feed to it.
+        feed_dict = {self.tf_train_dataset : fake_data, self.tf_train_labels : fake_labels}
+        [predictions] = session.run([self.train_prediction], feed_dict=feed_dict)
+        class_predictions = predictions[:, wanted_class]
+        choice = np.argmin(class_predictions)
+        #plt.imshow(np.reshape(fake_data[choice], (self.data.image_size, self.data.image_size)), cmap="gray")
+        print("Prediction for worst: %f" % class_predictions[choice])
+        for step in range(10000):
+            #print("fake shape is ", fake_data.shape)
+            # re-normalize choice
+            choice_image = fake_data[choice]
+            choice_image = choice_image - np.mean(choice_image)
+            image_min = np.min(choice_image)
+            image_max = np.max(choice_image)
+
+            #print("image shape is ", choice_image.shape)
+
+            if self.is_2d:
+                fake_data = np.tile(choice_image, (self.batch_size, 1, 1, 1))
+            else:
+                fake_data = np.tile(choice_image, (self.batch_size, 1))
+
+            #print("after tiling fake shape is ", fake_data.shape)
+
+            for i in range(self.batch_size):
+                new_pixel = np.random.uniform(image_min, image_max)
+                if self.is_2d:
+                    fake_data[i, np.random.randint(self.data.image_size), np.random.randint(self.data.image_size)] = new_pixel
+                else:
+                    fake_data[i, np.random.randint(self.data.image_size*self.data.image_size)] = new_pixel
             feed_dict = {self.tf_train_dataset : fake_data, self.tf_train_labels : fake_labels}
             [predictions] = session.run([self.train_prediction], feed_dict=feed_dict)
             class_predictions = predictions[:, wanted_class]
-            choice = np.argmin(class_predictions)
-            #plt.imshow(np.reshape(fake_data[choice], (self.data.image_size, self.data.image_size)), cmap="gray")
-            print("Prediction for worst: %f" % class_predictions[choice])
-            for step in range(10000):
-                #print("fake shape is ", fake_data.shape)
-                # re-normalize choice
-                choice_image = fake_data[choice]
-                choice_image = choice_image - np.mean(choice_image)
-                image_min = np.min(choice_image)
-                image_max = np.max(choice_image)
-
-                #print("image shape is ", choice_image.shape)
-
-                if self.is_2d:
-                    fake_data = np.tile(choice_image, (self.batch_size, 1, 1, 1))
-                else:
-                    fake_data = np.tile(choice_image, (self.batch_size, 1))
-
-                #print("after tiling fake shape is ", fake_data.shape)
-
-                for i in range(self.batch_size):
-                    new_pixel = np.random.uniform(image_min, image_max)
-                    if self.is_2d:
-                        fake_data[i, np.random.randint(self.data.image_size), np.random.randint(self.data.image_size)] = new_pixel
-                    else:
-                        fake_data[i, np.random.randint(self.data.image_size*self.data.image_size)] = new_pixel
-                feed_dict = {self.tf_train_dataset : fake_data, self.tf_train_labels : fake_labels}
-                [predictions] = session.run([self.train_prediction], feed_dict=feed_dict)
-                class_predictions = predictions[:, wanted_class]
-                choice = np.argmax(class_predictions)
-                if class_predictions[choice] > minimum_prediction:
-                    break
-            print("Prediction for best after %d steps: %f" % (step, class_predictions[choice]))
-            image = np.reshape(fake_data[choice], (self.data.image_size, self.data.image_size))
-            end_time = time.time()
-            total_time = end_time - start_time
-            print("Time: %.1fs" % total_time)
-            return image
+            choice = np.argmax(class_predictions)
+            if class_predictions[choice] > minimum_prediction:
+                break
+        print("Prediction for best after %d steps: %f" % (step, class_predictions[choice]))
+        image = np.reshape(fake_data[choice], (self.data.image_size, self.data.image_size))
+        end_time = time.time()
+        total_time = end_time - start_time
+        print("Time: %.1fs" % total_time)
+        return image
 
 class FCNetwork(Network):
     def __init__(self, batch_size, data, relu_sizes, with_dropout, initial_weights, initial_lr, lr_decay_steps):
@@ -358,8 +360,9 @@ def run_random_fc(data, best_so_far):
     lr_decay_steps = rand_float(100, 5000)
 
     network = FCNetwork(batch_size, data, [num_hidden1, num_hidden2, num_hidden3], with_dropout, initial_weights, initial_lr, lr_decay_steps)
-
-    test_accuracy, total_time, _ = network.train(num_steps, best_so_far, "best-fc.ckpt")
+    with network.session() as session:
+        total_time = network.train(session, num_steps)
+        test_accuracy, _, _ = network.test(session, best_so_far, "best-fc.ckpt")
     return (test_accuracy, with_dropout, initial_weights, initial_lr, lr_decay_steps, num_hidden1, num_hidden2, num_hidden3, total_time)
 
 def best_fc_network(data):
@@ -388,9 +391,9 @@ def run_random_conv(data):
 
     network = ConvNetwork(batch_size, data, patch_size, stride1, stride2, with_dropout, initial_weights, initial_lr, lr_decay_steps, depth1, depth2, num_hidden1, num_hidden2, num_hidden3)
 
-    test_accuracy, total_time, _ = network.train(num_steps, best_so_far, "best-convolution.ckpt")
-    if test_accuracy > best_so_far:
-        best_so_far = test_accuracy
+    with network.session() as session:
+        total_time = network.train(session, num_steps)
+        test_accuracy, _, _ = network.test(session, best_so_far, "best-convolution.ckpt")
     return (test_accuracy, with_dropout, initial_weights, initial_lr, lr_decay_steps, depth1, depth2, num_hidden1, num_hidden2, num_hidden3, total_time)
 
 def best_conv_network(data):
